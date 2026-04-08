@@ -39,15 +39,20 @@ class SXMReader:
                 logger.warning(f"跳过损坏文件: {self.file_path} (检测到只有 Header 或信号缺失)")
                 return False
 
-            # 3. 提取地形数据 (Z Channel)
-            # 兼容 Nanonis 不同的通道命名习惯 ('Z' 或 'Z (m)')
-            z_channel = self.signals.get('Z') or self.signals.get('Z (m)')
+            
+            # 3. 提取地形数据 (Z Channel) - 安全写法
+            z_channel = self.signals.get('Z')
+            if z_channel is None:
+                z_channel = self.signals.get('Z (m)')
+                
             if z_channel is None:
                 logger.warning(f"文件 {self.file_path} 中未找到 Z 通道信号")
                 return False
             
-            # 默认取前向扫描数据 (forward)，如果不存在则取后向
-            self.z_data = z_channel.get('forward') or z_channel.get('backward')
+            # 避免使用 'or' 触发 NumPy 数组布尔值判定异常
+            self.z_data = z_channel.get('forward')
+            if self.z_data is None:
+                self.z_data = z_channel.get('backward')
 
             # 4. 单位标准化 (将 Meters 转换为 Nanometers)
             # Nanonis header 中的 scan_range 单位通常是米 (m)
