@@ -1,0 +1,16 @@
+#存放物理参数和算法阈值
+# 图像处理参数
+preprocessing:
+  sigma: 1.0           # 高斯滤波标准差
+  auto_flatten: true    # 是否自动去倾斜
+
+# 物理比对参数
+matching:
+  tolerance: 0.05      # 晶格常数允许 5% 的误差
+  max_candidates: 5    # 输出匹配度最高的前 5 个材料
+
+# 数据库设置
+database:
+  provider: "Materials Project"
+  cache_results: true       # 是否在本地缓存查询结果
+  max_entries: 50           # 每次查询返回的最大候选材料数
