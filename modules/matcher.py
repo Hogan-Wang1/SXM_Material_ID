@@ -1,14 +1,14 @@
 import numpy as np
-from mp_api.client import MPRester  # 注意：必须使用新版 mp-api 库
+from mp_api.client import MPRester
 from pymatgen.core.surface import SlabGenerator
 
 class GeometricMaterialIdentifier:
-    def __init__(self, api_key, tolerance_length=0.05, tolerance_angle=3.0):
+    def __init__(self, api_key, tolerance_length=0.10, tolerance_angle=5.0):
         """
-        初始化几何驱动的材料识别器
+        初始化几何驱动的材料识别器 (MBE薄膜增强版)
         :param api_key: Materials Project API 密钥
-        :param tolerance_length: 晶格常数 a, b 的容差比例（默认 5%，即 0.05）
-        :param tolerance_angle: 晶格夹角 gamma 的绝对容差（默认 3.0 度）
+        :param tolerance_length: 晶格常数 a, b 的容差比例（默认扩大至 10%，适应薄膜应力）
+        :param tolerance_angle: 晶格夹角 gamma 的绝对容差（默认扩大至 5.0 度，适应扫描畸变）
         """
         self.api_key = api_key
         self.tol_len = tolerance_length
@@ -19,17 +19,18 @@ class GeometricMaterialIdentifier:
 
     def _query_phase_library(self, chemsys="Fe-Te"):
         """
-        步骤 1：获取包含指定元素的所有相 (适配最新版 MP 数据库 API)
+        步骤 1：获取包含指定元素的物理稳定相 (过滤掉纯理论亚稳态)
         """
         candidate_structures = {}
         print(f"正在通过 mp-api 连接 Materials Project 下载 [{chemsys}] 体系结构数据...")
         
         try:
             with MPRester(self.api_key) as mpr:
-                # 使用 summary.search 并限定 fields，极大提高拉取速度并避免无用数据下载
+                # 核心过滤：energy_above_hull=(0, 0.05) 确保只下载热力学稳定或极度接近稳定的真实相
                 docs = mpr.summary.search(
                     chemsys=chemsys, 
-                    fields=["material_id", "structure", "formula_pretty"]
+                    energy_above_hull=(0, 0.05),
+                    fields=["material_id", "structure", "formula_pretty", "energy_above_hull"]
                 )
                 
                 for doc in docs:
@@ -44,7 +45,7 @@ class GeometricMaterialIdentifier:
                     }
             
             self.phase_library = candidate_structures
-            print(f"成功拉取到 {len(candidate_structures)} 种可能的体相结构。")
+            print(f"成功拉取到 {len(candidate_structures)} 种真实存在的稳定体相结构。")
             return candidate_structures
             
         except Exception as e:
@@ -75,6 +76,10 @@ class GeometricMaterialIdentifier:
                 b_th = slab.lattice.b
                 gamma_th = slab.lattice.gamma
                 
+                # 理论库角度标准化 (确保理论相也是锐角标准)
+                if gamma_th > 90.0:
+                    gamma_th = 180.0 - gamma_th
+                
                 surface_db.append({
                     "hkl": hkl,
                     "a_th": a_th,
@@ -94,6 +99,10 @@ class GeometricMaterialIdentifier:
         """
         matched_results = []
         
+        # 鲁棒性增强：实验角度标准化 (将所有钝角转换为锐角，防止因为数学定义导致匹配失败)
+        if exp_gamma > 90.0:
+            exp_gamma = 180.0 - exp_gamma
+            
         # 检查是否已经缓存了该体系的数据库，如果没有则拉取
         if not self.phase_library:
             self._query_phase_library(chemsys=chemsys)
@@ -118,7 +127,8 @@ class GeometricMaterialIdentifier:
                     # 计算误差分数 (Error Score)，越低表示匹配度越高
                     error_a = min(abs(exp_a - a_th)/a_th, abs(exp_a - b_th)/b_th)
                     error_b = min(abs(exp_b - b_th)/b_th, abs(exp_b - a_th)/a_th)
-                    error_score = error_a + error_b + (abs(exp_gamma - gamma_th) / 180.0)
+                    # 角度误差归一化处理
+                    error_score = error_a + error_b + (abs(exp_gamma - gamma_th) / 90.0)
                     
                     matched_results.append({
                         "Material": formula,
