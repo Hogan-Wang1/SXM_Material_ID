@@ -13,7 +13,14 @@ if not hasattr(np, "object"):
 
 import nanonispy as nap
 import os
-from modules.config import logger
+import logging
+
+# 如果您本地的 config.py 中没有 logger，这里提供一个基础配置确保不报错
+try:
+    from modules.config import logger
+except ImportError:
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
 
 class SXMReader:
     """
@@ -102,3 +109,22 @@ class SXMReader:
             "nm_per_pixel": self.nm_per_pixel,
             "filename": os.path.basename(self.file_path)
         }
+
+# ==========================================
+# 供 main.py 调用的快速接口函数
+# ==========================================
+def read_sxm(file_path):
+    """
+    实例化 SXMReader 并提取所需的矩阵和物理信息字典。
+    该接口直接向外输出主程序进行 FFT 和晶格计算所需的标准化数据。
+    """
+    reader = SXMReader(file_path)
+    success = reader.load_data()
+    
+    if not success:
+        raise ValueError(f"SXMReader 解析失败或文件已损坏: {file_path}")
+        
+    z_data = reader.get_z_matrix()
+    physical_info = reader.get_physical_info()
+    
+    return z_data, physical_info

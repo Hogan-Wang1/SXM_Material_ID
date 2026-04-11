@@ -1,122 +1,174 @@
 import os
-import csv
+import argparse
 import tkinter as tk
 from tkinter import filedialog
+from pathlib import Path
+import csv
 from datetime import datetime
-import matplotlib
-# 强制使用后台后端，禁止分析图弹出
-matplotlib.use('Agg') 
+from dotenv import load_dotenv  # 新增：用于加载 .env 文件
 
-from modules.reader import SXMReader
-from modules.analyzer import STMAnalyzer
-from modules.database import MaterialDatabase
-from modules.config import logger, BASE_DIR
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
-def select_folder_gui():
-    """弹出 GUI 界面选择文件夹"""
+# ==========================================
+# 导入项目模块
+# ==========================================
+try:
+    from modules.reader import read_sxm  
+    from modules.analyzer import STMAnalyzer 
+    from modules.matcher import GeometricMaterialIdentifier
+except ImportError as e:
+    print(f"模块导入错误: {e}")
+    print("请检查模块是否存在。")
+    exit(1)
+
+def parse_arguments():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description="SXM_Material_ID: STM图像自动化材料识别管道 (批量处理版)")
+    parser.add_argument("-c", "--chemsys", type=str, required=True, help="化学系统，例如 'Fe-Te' 或 'Bi-Se'")
+    
+    # 修改：将 api_key 改为可选参数，默认从环境变量读取
+    parser.add_argument("-k", "--api_key", type=str, default=None, help="Materials Project API Key (覆盖 .env 中的设置)")
+    
+    parser.add_argument("-tl", "--tol_len", type=float, default=0.05, help="晶格常数容差比例 (默认: 0.05 即 5%)")
+    parser.add_argument("-ta", "--tol_ang", type=float, default=3.0, help="晶格夹角绝对容差 (默认: 3.0度)")
+    return parser.parse_args()
+
+def select_folder():
+    """调用系统窗口选择文件夹"""
     root = tk.Tk()
-    root.withdraw()  # 隐藏主窗口
-    root.attributes('-topmost', True)  # 确保对话框在最前面
-    
-    logger.info("正在等待用户选择目标文件夹...")
-    target_dir = filedialog.askdirectory(title="请选择包含 .sxm 文件的文件夹")
-    
-    root.destroy() # 关闭 tkinter 实例
-    return target_dir
-
-def init_run_folder(target_dir):
-    """根据目标文件夹名称和当前时间创建唯一的存储目录"""
-    folder_name = os.path.basename(os.path.normpath(target_dir))
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    results_root = os.path.join(BASE_DIR, "results")
-    current_run_dir = os.path.join(results_root, f"{timestamp}_{folder_name}")
-    
-    os.makedirs(current_run_dir, exist_ok=True)
-    return results_root, current_run_dir
+    root.withdraw()
+    root.attributes('-topmost', True) 
+    folder_path = filedialog.askdirectory(title="请选择包含 .sxm 文件的文件夹")
+    return folder_path
 
 def main():
-    # 1. 弹出文件夹选择界面
-    target_path = select_folder_gui()
+    # 1. 初始化命令行参数
+    args = parse_arguments()
+
+    # --- 新增：处理 API Key 逻辑 ---
+    # 优先使用命令行传入的 key，如果没有，则读取 .env 文件中的 MP_API_KEY
+    final_api_key = args.api_key or os.getenv("MP_API_KEY")
     
-    if not target_path:
-        logger.warning("未选择任何文件夹，程序退出。")
+    if not final_api_key:
+        print("[错误] 未找到 Materials Project API Key！")
+        print("请确保已在根目录创建 .env 文件并写入 MP_API_KEY=您的密钥，或者通过 -k 参数临时传入。")
+        return
+    # -------------------------------
+
+    # 2. 弹出文件夹选择界面
+    print("正在等待选择文件夹...")
+    target_folder = select_folder()
+    
+    if not target_folder:
+        print("[!] 未选择文件夹，程序已退出。")
         return
 
-    # 2. 初始化路径逻辑
-    results_root, current_run_dir = init_run_folder(target_path)
-    db = MaterialDatabase()
-    
-    # 3. 获取目标文件夹内所有 .sxm 文件
-    files = [f for f in os.listdir(target_path) if f.endswith(".sxm")]
-    if not files:
-        logger.warning(f"在路径 {target_path} 中未找到任何 .sxm 文件。")
+    # 3. 收集所有 .sxm 文件
+    sxm_files = list(Path(target_folder).rglob("*.sxm"))
+    if not sxm_files:
+        print(f"[!] 在 {target_folder} 中未找到任何 .sxm 文件。")
         return
 
-    logger.info(f"已选定目标：{target_path}")
-    logger.info(f"分析结果将保存至：{current_run_dir}")
+    print(f"\n========== SXM Material ID 批量处理 ==========")
+    print(f"目标文件夹: {target_folder}")
+    print(f"发现文件数: {len(sxm_files)} 个")
+    print(f"先验化学系统: {args.chemsys}")
+    print(f"容差设置: 晶格 ±{args.tol_len*100}%, 角度 ±{args.tol_ang}°")
+    print("API Key 来源: " + ("命令行参数" if args.api_key else ".env 配置文件"))
+    print("==============================================\n")
 
-    summary_path = os.path.join(results_root, "summary.csv")
-    csv_header = ["Timestamp", "Source_Folder", "Filename", "Status", "a(nm)", "b(nm)", "Angle", "Best_Match", "Score", "Error_Msg"]
+    # 4. 设置结果输出路径
+    result_dir = Path("results")
+    result_dir.mkdir(parents=True, exist_ok=True)
     
-    file_exists = os.path.isfile(summary_path)
-    
-    with open(summary_path, mode='a', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=csv_header)
-        if not file_exists:
-            writer.writeheader()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_csv = result_dir / f"Batch_Report_{args.chemsys}_{timestamp}.csv"
 
-        for filename in files:
-            file_path = os.path.join(target_path, filename)
-            now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 5. 初始化几何匹配器并预拉取数据库
+    print("正在初始化 Materials Project 数据库连接并拉取候选相...")
+    try:
+        matcher = GeometricMaterialIdentifier(
+            api_key=final_api_key,  # 使用解析好的最终 key
+            tolerance_length=args.tol_len, 
+            tolerance_angle=args.tol_ang
+        )
+        matcher._query_phase_library(chemsys=args.chemsys)
+    except Exception as e:
+        import traceback
+        print(f"[错误] 无法连接到 Materials Project 或拉取数据失败！详细错误如下：")
+        traceback.print_exc()  # 这会把红色的详细报错链全部打出来
+        return
+
+    # 6. 打开 CSV 并开始批量处理流水线
+    with open(report_csv, mode='w', newline='', encoding='utf-8-sig') as csv_file:
+        fieldnames = ['File Name', 'Exp_a (Å)', 'Exp_b (Å)', 'Exp_gamma (°)', 'Status', 'Best Match', 'Plane', 'Theoretical Params', 'Error Score']
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for idx, file_path in enumerate(sxm_files, 1):
+            file_name = file_path.name
+            print(f"\n[{idx}/{len(sxm_files)}] 正在分析: {file_name}")
+            
             row_data = {
-                "Timestamp": now_time,
-                "Source_Folder": os.path.basename(target_path),
-                "Filename": filename,
-                "Status": "Processing",
-                "a(nm)": "-", "b(nm)": "-", "Angle": "-", 
-                "Best_Match": "-", "Score": "-", "Error_Msg": ""
+                'File Name': file_name,
+                'Exp_a (Å)': 'N/A', 'Exp_b (Å)': 'N/A', 'Exp_gamma (°)': 'N/A',
+                'Status': 'Failed', 'Best Match': 'None', 'Plane': 'None', 
+                'Theoretical Params': 'None', 'Error Score': 'N/A'
             }
 
             try:
-                # 读取数据
-                reader = SXMReader(file_path)
-                if not reader.load_data():
-                    raise ValueError("文件读取失败")
-
-                # 分析晶格
-                analyzer = STMAnalyzer(reader.get_z_matrix(), reader.get_physical_info())
-                analyzer.preprocess()
+                # 步骤 A: 读取原始数据
+                z_data, physical_info = read_sxm(str(file_path))
+                
+                # 步骤 B: 实例化分析器并提取特征
+                analyzer = STMAnalyzer(z_data, physical_info)
                 lattice_results = analyzer.find_lattice_parameters()
 
-                if lattice_results:
-                    a, b, ang = lattice_results['a'], lattice_results['b'], lattice_results['angle']
-                    row_data.update({"a(nm)": round(a, 4), "b(nm)": round(b, 4), "Angle": round(ang, 2)})
+                if lattice_results is None:
+                    raise ValueError("未能在频域中提取到足够数量的 Bragg 峰。")
 
-                    # 数据库比对
-                    # 注意：由于去掉了命令行，如果需要 chemsys 可以在此处手动指定或保持 None
-                    matches = db.match_lattice(a, b, ang, chemsys=None)
-                    if matches:
-                        row_data.update({
-                            "Best_Match": f"{matches[0]['formula']} ({matches[0]['material_id']})",
-                            "Score": matches[0]['score'],
-                            "Status": "Success"
-                        })
-                    else:
-                        row_data["Status"] = "No_Match"
+                # 单位换算
+                exp_a = lattice_results["a"] * 10.0
+                exp_b = lattice_results["b"] * 10.0
+                exp_gamma = lattice_results["angle"]
+                
+                # --- 新增：角度标准化处理 ---
+                # 将所有大于 90 度的钝角转换为对应的锐角，保证和数据库标准一致
+                if exp_gamma > 90:
+                    exp_gamma = 180.0 - exp_gamma
 
-                # 静默保存分析图
-                analyzer.visualize_all(results=lattice_results, save_path=current_run_dir)
+                row_data['Exp_a (Å)'] = f"{exp_a:.3f}"
+                row_data['Exp_b (Å)'] = f"{exp_b:.3f}"
+                row_data['Exp_gamma (°)'] = f"{exp_gamma:.1f}"
+                print(f"  -> 提取晶格: a≈{exp_a:.3f}Å, b≈{exp_b:.3f}Å, γ≈{exp_gamma:.1f}°")
+
+                # 步骤 C: 容差几何匹配
+                matched_results = matcher.match_experimental_data(
+                    exp_a=exp_a, exp_b=exp_b, exp_gamma=exp_gamma, chemsys=args.chemsys
+                )
+
+                if matched_results:
+                    best_match = matched_results[0]
+                    row_data['Status'] = 'Success'
+                    row_data['Best Match'] = best_match['Material']
+                    row_data['Plane'] = f"({''.join(map(str, best_match['Plane']))})"
+                    row_data['Theoretical Params'] = best_match['Theoretical']
+                    row_data['Error Score'] = f"{best_match['Error Score']:.4f}"
+                    print(f"  -> 最佳匹配: {row_data['Best Match']} 面: {row_data['Plane']}")
+                else:
+                    row_data['Status'] = 'No Match'
+                    print("  -> 警告: 当前容差下未找到匹配项。")
 
             except Exception as e:
-                logger.error(f"文件 {filename} 处理崩溃: {str(e)}")
-                row_data["Status"] = "Failed"
-                row_data["Error_Msg"] = str(e)
-            finally:
-                writer.writerow(row_data)
-                csvfile.flush()
+                print(f"  -> [错误] 处理失败: {e}")
+                row_data['Status'] = f"Error: {str(e)}"
 
-    logger.info(f"所有任务已完成。总结报告：{summary_path}")
+            writer.writerow(row_data)
+
+    print(f"\n========== 批量处理完成 ==========")
+    print(f"已成功分析 {len(sxm_files)} 个文件。")
+    print(f"详细结果报表已保存至: {report_csv.absolute()}")
 
 if __name__ == "__main__":
     main()
