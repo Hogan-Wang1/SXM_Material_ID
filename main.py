@@ -1,86 +1,122 @@
-import numpy as np
-# 兼容性补丁
-if not hasattr(np, 'float'): np.float = float
-if not hasattr(np, 'int'): np.int = int
-
 import os
-import matplotlib.pyplot as plt
-from modules.config import logger
+import csv
+import tkinter as tk
+from tkinter import filedialog
+from datetime import datetime
+import matplotlib
+# 强制使用后台后端，禁止分析图弹出
+matplotlib.use('Agg') 
+
 from modules.reader import SXMReader
-from modules.analyzer import LatticeAnalyzer
+from modules.analyzer import STMAnalyzer
+from modules.database import MaterialDatabase
+from modules.config import logger, BASE_DIR
 
-def run_single_test():
-    logger.info("=== 原子分辨算法专项验证 (单文件模式) ===")
+def select_folder_gui():
+    """弹出 GUI 界面选择文件夹"""
+    root = tk.Tk()
+    root.withdraw()  # 隐藏主窗口
+    root.attributes('-topmost', True)  # 确保对话框在最前面
     
-    # 1. 获取第一个文件
-    data_dir = os.path.join(os.getcwd(), "data")
-    sxm_files = [f for f in os.listdir(data_dir) if f.endswith('.sxm')]
+    logger.info("正在等待用户选择目标文件夹...")
+    target_dir = filedialog.askdirectory(title="请选择包含 .sxm 文件的文件夹")
     
-    if not sxm_files:
-        logger.error("data 文件夹中没有找到 .sxm 文件！")
+    root.destroy() # 关闭 tkinter 实例
+    return target_dir
+
+def init_run_folder(target_dir):
+    """根据目标文件夹名称和当前时间创建唯一的存储目录"""
+    folder_name = os.path.basename(os.path.normpath(target_dir))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    results_root = os.path.join(BASE_DIR, "results")
+    current_run_dir = os.path.join(results_root, f"{timestamp}_{folder_name}")
+    
+    os.makedirs(current_run_dir, exist_ok=True)
+    return results_root, current_run_dir
+
+def main():
+    # 1. 弹出文件夹选择界面
+    target_path = select_folder_gui()
+    
+    if not target_path:
+        logger.warning("未选择任何文件夹，程序退出。")
         return
-    
-    target_file = sxm_files[0]
-    file_path = os.path.join(data_dir, target_file)
-    logger.info(f"正在分析文件: {target_file}")
 
-    # 2. 读取数据
-    reader = SXMReader(file_path)
-    if not reader.load_data():
-        logger.error("文件读取失败")
+    # 2. 初始化路径逻辑
+    results_root, current_run_dir = init_run_folder(target_path)
+    db = MaterialDatabase()
+    
+    # 3. 获取目标文件夹内所有 .sxm 文件
+    files = [f for f in os.listdir(target_path) if f.endswith(".sxm")]
+    if not files:
+        logger.warning(f"在路径 {target_path} 中未找到任何 .sxm 文件。")
         return
 
-    # 3. 执行分析流水线
-    # 传入原始 Z 矩阵和每个像素代表的纳米数
-    analyzer = LatticeAnalyzer(reader.get_z_matrix(), reader.nm_per_pixel)
-    
-    processed_z = analyzer.preprocess()
-    fft_mag = analyzer.compute_fft()
-    peaks = analyzer.find_bragg_peaks(q_min=1.2) # 排除中心低频噪声
-    results = analyzer.calculate_lattice()
+    logger.info(f"已选定目标：{target_path}")
+    logger.info(f"分析结果将保存至：{current_run_dir}")
 
-    # 4. 可视化验证
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    summary_path = os.path.join(results_root, "summary.csv")
+    csv_header = ["Timestamp", "Source_Folder", "Filename", "Status", "a(nm)", "b(nm)", "Angle", "Best_Match", "Score", "Error_Msg"]
     
-    # 子图1：原始地形图 (展示倾斜和弯曲)
-    axes[0].set_title(f"Original Topography\n(Inclined/Curved)")
-    im0 = axes[0].imshow(reader.get_z_matrix(), cmap='inferno')
-    plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
+    file_exists = os.path.isfile(summary_path)
     
-    # 子图2：平整化后的原子分辨图 (应该看到清晰的点阵)
-    axes[1].set_title("After 2nd-Order Poly Fit\n(Atomic Resolution)")
-    im1 = axes[1].imshow(processed_z, cmap='gray') # 原子图用灰色更清晰
-    plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-    
-    # 子图3：FFT 能量谱 + 峰值标记
-    axes[2].set_title("2D-FFT & Bragg Peaks\n(Red X marks the spot)")
-    # 使用对数增强弱峰
-    fft_log = np.log1p(fft_mag)
-    axes[2].imshow(fft_log, cmap='magma')
-    
-    # 绘制找到的峰 (将 q 坐标转回像素坐标)
-    center = np.array(fft_mag.shape) / 2
-    N = fft_mag.shape[0]
-    dx = reader.nm_per_pixel
-    
-    for qx, qy in analyzer.peaks_coord:
-        # 反公式：px = q * N * dx + center
-        px = qx * N * dx + center[1]
-        py = qy * N * dx + center[0]
-        axes[2].plot(px, py, 'rx', markersize=12, markeredgewidth=2)
-        
-    plt.tight_layout()
-    
-    # 打印最终物理结果
-    if results:
-        print("\n" + "="*30)
-        print(f"分析结果摘要 ({target_file}):")
-        print(f"晶格常数 a: {results['a']:.4f} nm")
-        print(f"晶格常数 b: {results['b']:.4f} nm")
-        print(f"轴间夹角  : {results['angle']:.2f}°")
-        print("="*30 + "\n")
-    
-    plt.show()
+    with open(summary_path, mode='a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=csv_header)
+        if not file_exists:
+            writer.writeheader()
+
+        for filename in files:
+            file_path = os.path.join(target_path, filename)
+            now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            row_data = {
+                "Timestamp": now_time,
+                "Source_Folder": os.path.basename(target_path),
+                "Filename": filename,
+                "Status": "Processing",
+                "a(nm)": "-", "b(nm)": "-", "Angle": "-", 
+                "Best_Match": "-", "Score": "-", "Error_Msg": ""
+            }
+
+            try:
+                # 读取数据
+                reader = SXMReader(file_path)
+                if not reader.load_data():
+                    raise ValueError("文件读取失败")
+
+                # 分析晶格
+                analyzer = STMAnalyzer(reader.get_z_matrix(), reader.get_physical_info())
+                analyzer.preprocess()
+                lattice_results = analyzer.find_lattice_parameters()
+
+                if lattice_results:
+                    a, b, ang = lattice_results['a'], lattice_results['b'], lattice_results['angle']
+                    row_data.update({"a(nm)": round(a, 4), "b(nm)": round(b, 4), "Angle": round(ang, 2)})
+
+                    # 数据库比对
+                    # 注意：由于去掉了命令行，如果需要 chemsys 可以在此处手动指定或保持 None
+                    matches = db.match_lattice(a, b, ang, chemsys=None)
+                    if matches:
+                        row_data.update({
+                            "Best_Match": f"{matches[0]['formula']} ({matches[0]['material_id']})",
+                            "Score": matches[0]['score'],
+                            "Status": "Success"
+                        })
+                    else:
+                        row_data["Status"] = "No_Match"
+
+                # 静默保存分析图
+                analyzer.visualize_all(results=lattice_results, save_path=current_run_dir)
+
+            except Exception as e:
+                logger.error(f"文件 {filename} 处理崩溃: {str(e)}")
+                row_data["Status"] = "Failed"
+                row_data["Error_Msg"] = str(e)
+            finally:
+                writer.writerow(row_data)
+                csvfile.flush()
+
+    logger.info(f"所有任务已完成。总结报告：{summary_path}")
 
 if __name__ == "__main__":
-    run_single_test()
+    main()
