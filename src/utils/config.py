@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 1. 自动定位项目根目录
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # 2. 加载 .env 环境变量
 load_dotenv(BASE_DIR / ".env")

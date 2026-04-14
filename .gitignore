@@ -6,3 +6,6 @@ data/
 .vscode/
 output/
 cache.db
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+*$py.class

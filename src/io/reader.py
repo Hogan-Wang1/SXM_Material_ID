@@ -17,7 +17,7 @@ import logging
 
 # 如果您本地的 config.py 中没有 logger，这里提供一个基础配置确保不报错
 try:
-    from modules.config import logger
+    from src.utils.config import logger
 except ImportError:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)

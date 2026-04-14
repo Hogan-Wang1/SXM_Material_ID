@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from scipy import ndimage, optimize
-from modules.config import logger
+from src.utils.config import logger
 
 class STMAnalyzer:
     def __init__(self, z_data, physical_info):
