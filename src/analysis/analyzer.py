@@ -177,7 +177,7 @@ class STMAnalyzer:
 
         ax2.set_xlim([-zoom_range, zoom_range])
         ax2.set_ylim([-zoom_range, zoom_range])
-        ax2.set_title(f"2D-FFT High-Res Zoom ($\pm${zoom_range} $nm^{{-1}}$)")
+        ax2.set_title(rf"2D-FFT High-Res Zoom ($\pm${zoom_range} $nm^{{-1}}$)")
         ax2.set_xlabel("$q_x (nm^{-1})$")
         ax2.set_ylabel("$q_y (nm^{-1})$")
         
