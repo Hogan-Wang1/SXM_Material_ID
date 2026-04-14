@@ -1,30 +1,25 @@
-# SXM_Material_ID
+# SXM_Material_ID: 对称性驱动的 STM 自动化材料识别系统
 
-## 1. 项目简介
-本项目旨在开发一套自动化的 STM 原子分辨图像分析流水线，实现从原始 `.sxm` 数据到材料物相识别的转化，特别针对 MBE 生长的量子材料系统（如超导体、拓扑绝缘体）。
+`SXM_Material_ID` 是一套专为扫描隧道显微镜（STM）原子分辨图像设计的自动化分析流水线。该系统能够直接读取 Nanonis 原始数据，通过频域分析提取晶格特征，并利用 Materials Project 数据库实现从“实验形貌”到“材料物相及晶面”的智能识别。
 
-## 2. 核心技术路径 (The Workflow)
-### 1) 图像预处理 (Preprocessing)
-- **Flattening**: 去除样品倾斜背景。
-- **Drift Correction**: 基于标准参考物或对称性约束校正压电陶瓷漂移。
-- **Filtering**: 使用高斯/维纳滤波抑制电子学噪声。
+特别针对 **分子束外延 (MBE)** 生长的薄膜样品进行了优化，引入了**对称性驱动（Symmetry-Driven）**的匹配算法，能够有效应对压电陶瓷标定漂移、基底应力畸变以及非对称性重构等复杂的实验环境。
 
-### 2) 晶体周期性提取 (Feature Extraction)
-- **2D-FFT**: 转换至频域。
-- **Auto-Peak Finding**: 自动识别 Bragg 峰位置。
-- **Lattice Calculation**: 推导实空间晶格矢量 $\vec{a}, \vec{b}$ 及夹角 $\gamma$。
+## 🌟 核心特性
 
-### 3) 智能比对 (Material Identification)
-- **Database Query**: 通过 API 连接 Materials Project 数据库。
-- **Slab Projection**: 将三维体相数据沿特定晶面 (hkl) 投影为二维表面。
-- **Scoring System**: 根据晶格参数匹配度评分，输出 top-k 候选材料。
+* **对称性驱动比对**：突破传统的绝对长度匹配限制，优先校验晶格 a/b 比例及夹角 γ，极大包容压电陶瓷因老化或非线性产生的标定误差（默认支持高达 25% 的长度偏差）。
+* **高指数晶面自动搜索**：内置动态密勒指数生成器，支持搜索包括 (001)、(112)、(221) 等在内的所有中高指数截面，适配非解理面生长的薄膜样品。
+* **热力学稳定性过滤**：自动接入 Materials Project 实时数据，并基于 `energy_above_hull` 指标屏蔽不稳定的理论预测相，确保匹配结果均为现实存在的物理相。
+* **Top-3 多候选报告**：批量处理结果不再仅给出一个答案，而是输出包含误差评分的前三名候选物相排行榜，方便科研人员进行比对验证。
+* **工业级环境配置**：支持 `.env` 敏感信息隔离，安全管理您的 Materials Project API Key。
 
-## 3. 依赖项 (Requirements)
-- `nanonispy`: .sxm 文件解析
-- `pySPM`: 扫描探针显微数据处理
-- `pymatgen`: 材料科学数据库对接
-- `scikit-image`: 图像处理算法
+## 🛠 技术架构
 
-## 4. 关键挑战 (Pending)
-- 如何处理 MBE 生长中常见的**表面重构（Surface Reconstruction）**导致周期性与体相不一致的问题。
-- 提高在低信噪比图像下的 Bragg 峰识别精度。
+1.  **数据读取 (`modules/reader.py`)**: 解析 `.sxm` 文件，提取 Z 通道地形数据，并将物理单位标准化为纳米（nm）。内置针对高版本 NumPy 的兼容性补丁。
+2.  **特征提取 (`modules/analyzer.py`)**: 执行图像平面化（Flattening）、滤波去噪、2D-FFT 变换以及亚像素级 2D-高斯峰拟合，精确提取晶格矢量。
+3.  **智能比对 (`modules/matcher.py`)**: 将实验值与数据库投影表面进行对称性张量比对。支持角度标准化处理（钝角/锐角归一化）。
+4.  **调度中心 (`main.py`)**: 提供 GUI 文件夹选择界面与 CLI 命令行控制，实现批量化处理与 CSV 结果导出。
+
+## 🚀 快速开始
+
+### 1. 安装依赖
+pip install numpy matplotlib scipy nanonispy pymatgen mp-api python-dotenv
